@@ -1,0 +1,220 @@
+import streamlit as st
+import re
+
+# --- 1. 基準値と説明のデータ定義 ---
+# (これは一般的な基準値です。年齢、性別、検査機関によって異なる場合があります。)
+# 項目名、表示名、単位、基準値、説明、高値/低値の可能性
+BLOOD_ITEMS_INFO = {
+    "WBC": {"name": "白血球", "unit": "/µL", "min": 4000, "max": 9000,
+            "desc": "体の免疫機能を担う細胞です。",
+            "high": "感染症や炎症、ストレスなどの可能性があります。",
+            "low": "免疫力の低下や骨髄抑制などの可能性があります。"},
+    "RBC": {"name": "赤血球", "unit": "万/µL", "min": 400, "max": 550,
+            "desc": "全身に酸素を運ぶ役割をします。",
+            "high": "脱水や多血症などの可能性があります。",
+            "low": "貧血の可能性があります。"},
+    "Hb": {"name": "ヘモグロビン", "unit": "g/dL", "min": 13.0, "max": 17.0,
+           "desc": "赤血球に含まれ、酸素を運搬します。",
+           "high": "脱水や多血症などの可能性があります。",
+           "low": "貧血の可能性があります。"},
+    "Ht": {"name": "ヘマトクリット", "unit": "%", "min": 38.0, "max": 50.0,
+           "desc": "血液中に占める赤血球の割合です。",
+           "high": "脱水や多血症などの可能性があります。",
+           "low": "貧血の可能性があります。"},
+    "Plt": {"name": "血小板", "unit": "万/µL", "min": 15.0, "max": 40.0,
+            "desc": "血液を固める働き（止血）をします。",
+            "high": "炎症や鉄欠乏性貧血、本態性血小板血症などの可能性があります。",
+            "low": "出血傾向、免疫性血小板減少症、骨髄抑制などの可能性があります。"},
+    "AST": {"name": "AST (GOT)", "unit": "U/L", "min": 10, "max": 40,
+            "desc": "肝臓や心臓などに多く存在する酵素です。",
+            "high": "肝機能障害、心筋梗塞、筋肉の損傷などの可能性があります。",
+            "low": None}, # 低値の可能性は特筆しない場合
+    "ALT": {"name": "ALT (GPT)", "unit": "U/L", "min": 5, "max": 45,
+            "desc": "主に肝臓に多く存在する酵素で、肝機能の指標となります。",
+            "high": "肝機能障害の可能性があります。",
+            "low": None},
+    "γ-GTP": {"name": "γ-GTP", "unit": "U/L", "min": 0, "max": 70,
+              "desc": "肝臓や胆道に多く存在する酵素で、アルコールや薬剤の影響で上昇することがあります。",
+              "high": "肝機能障害、胆道系の異常、アルコール摂取などの可能性があります。",
+              "low": None},
+    "Cre": {"name": "クレアチニン", "unit": "mg/dL", "min": 0.6, "max": 1.1,
+            "desc": "筋肉の代謝産物で、腎機能の指標となります。",
+            "high": "腎機能の低下、脱水などの可能性があります。",
+            "low": "筋肉量の減少などの可能性があります。"},
+    "BUN": {"name": "尿素窒素", "unit": "mg/dL", "min": 8, "max": 20,
+            "desc": "タンパク質の代謝産物で、腎機能の指標となります。",
+            "high": "腎機能の低下、脱水、高タンパク食などの可能性があります。",
+            "low": "肝機能障害、低タンパク食などの可能性があります。"},
+    "TC": {"name": "総コレステロール", "unit": "mg/dL", "min": 120, "max": 220,
+           "desc": "体内のコレステロール全体の量を示します。",
+           "high": "脂質異常症、甲状腺機能低下症などの可能性があります。",
+           "low": "栄養障害、肝機能障害などの可能性があります。"},
+    "HDL": {"name": "HDLコレステロール", "unit": "mg/dL", "min": 40, "max": 90,
+            "desc": "「善玉コレステロール」と呼ばれ、余分なコレステロールを回収します。",
+            "high": None,
+            "low": "脂質異常症、動脈硬化のリスク増加などの可能性があります。"},
+    "LDL": {"name": "LDLコレステロール", "unit": "mg/dL", "min": 60, "max": 140,
+            "desc": "「悪玉コレステロール」と呼ばれ、増えすぎると動脈硬化の原因となります。",
+            "high": "脂質異常症、動脈硬化のリスク増加などの可能性があります。",
+            "low": "栄養障害、肝機能障害などの可能性があります。"},
+    "TG": {"name": "中性脂肪", "unit": "mg/dL", "min": 30, "max": 149,
+           "desc": "エネルギー源として蓄えられますが、増えすぎると動脈硬化の原因となります。",
+           "high": "脂質異常症、肥満、糖尿病などの可能性があります。",
+           "low": "栄養障害、肝機能障害などの可能性があります。"},
+    "Glucose": {"name": "血糖 (グルコース)", "unit": "mg/dL", "min": 70, "max": 109,
+                "desc": "血液中のブドウ糖の濃度です。",
+                "high": "糖尿病、ストレス、ステロイド薬の影響などの可能性があります。",
+                "low": "低血糖、インスリン過剰などの可能性があります。"},
+    "HbA1c": {"name": "HbA1c", "unit": "%", "min": 4.6, "max": 6.2,
+              "desc": "過去1～2ヶ月間の血糖コントロールの状態を反映します。",
+              "high": "糖尿病、または糖尿病予備軍の可能性があります。",
+              "low": "まれに低血糖傾向や溶血性貧血などの可能性があります。"},
+}
+
+
+# --- 2. データ解析関数 ---
+def analyze_blood_data_form(data):
+    """
+    フォームから入力された血液データを分析し、結果をMarkdown形式で返します。
+    """
+    results = []
+    abnormal_items = []
+
+    for item_key, value in data.items():
+        if value is None: # 入力がない場合はスキップ
+            continue
+
+        if item_key in BLOOD_ITEMS_INFO:
+            info = BLOOD_ITEMS_INFO[item_key]
+            item_name = info["name"]
+            min_val = info["min"]
+            max_val = info["max"]
+            unit = info["unit"]
+
+            status = "正常"
+            possible_causes = ""
+
+            if value < min_val:
+                status = "**低値**"
+                if info["low"]:
+                    possible_causes = f"*   可能性: {info['low']}\n"
+                abnormal_items.append(item_name)
+            elif value > max_val:
+                status = "**高値**"
+                if info["high"]:
+                    possible_causes = f"*   可能性: {info['high']}\n"
+                abnormal_items.append(item_name)
+
+            result_text = f"**【{item_name} ({item_key})】**\n"
+            result_text += f"*   測定値: {value} {unit}\n"
+            result_text += f"*   基準値: {min_val} - {max_val} {unit}\n"
+            result_text += f"*   判定: {status}\n"
+            result_text += f"*   説明: {info['desc']}\n"
+            result_text += possible_causes
+
+            results.append(result_text)
+        else:
+            # 基本的にBLOOD_ITEMS_INFOにない項目は来ない想定だが、念のため
+            results.append(f"**【不明な項目】**\n*   項目名: {item_key}\n*   測定値: {value}\n*   この項目は分析できませんでした。")
+
+    summary = "\n---\n**【全体サマリー】**\n"
+    if abnormal_items:
+        summary += f"入力されたデータでは、**{', '.join(abnormal_items)}** が基準値から外れています。\n"
+    else:
+        summary += "全ての項目が基準値内でした。\n"
+
+    summary += "\n**【重要なお知らせ】**\n"
+    summary += "この情報はあくまで一般的な参考情報であり、医療行為ではありません。診断や治療の代わりにはなりません。\n"
+    summary += "ご自身の健康状態についてご心配な場合は、必ず医師にご相談ください。\n"
+
+    return "\n\n".join(results) + summary
+
+# --- 3. StreamlitアプリのUI構築 ---
+st.set_page_config(page_title="血液データ分析フォーム", layout="centered")
+st.title("🩸 血液データ分析フォーム")
+
+st.warning(
+    "**免責事項:** このツールは医療行為ではありません。診断や治療の代わりにはなりません。提供される情報は一般的なものであり、個人の健康状態や病状を特定するものではありません。異常値が検出された場合や健康に関する懸念がある場合は、必ず医師にご相談ください。"
+)
+
+st.markdown("以下の入力欄に血液検査の結果を入力し、「分析する」ボタンを押してください。")
+st.markdown("---")
+
+# 入力フォームの作成
+with st.form("blood_data_form"):
+    st.subheader("血算")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        wbc = st.number_input(f"{BLOOD_ITEMS_INFO['WBC']['name']} ({BLOOD_ITEMS_INFO['WBC']['unit']})", min_value=0.0, format="%.1f", key="WBC_input")
+        rbc = st.number_input(f"{BLOOD_ITEMS_INFO['RBC']['name']} ({BLOOD_ITEMS_INFO['RBC']['unit']})", min_value=0.0, format="%.1f", key="RBC_input")
+    with col2:
+        hb = st.number_input(f"{BLOOD_ITEMS_INFO['Hb']['name']} ({BLOOD_ITEMS_INFO['Hb']['unit']})", min_value=0.0, format="%.1f", key="Hb_input")
+        ht = st.number_input(f"{BLOOD_ITEMS_INFO['Ht']['name']} ({BLOOD_ITEMS_INFO['Ht']['unit']})", min_value=0.0, format="%.1f", key="Ht_input")
+    with col3:
+        plt = st.number_input(f"{BLOOD_ITEMS_INFO['Plt']['name']} ({BLOOD_ITEMS_INFO['Plt']['unit']})", min_value=0.0, format="%.1f", key="Plt_input")
+
+    st.subheader("肝機能")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ast = st.number_input(f"{BLOOD_ITEMS_INFO['AST']['name']} ({BLOOD_ITEMS_INFO['AST']['unit']})", min_value=0, key="AST_input")
+    with col2:
+        alt = st.number_input(f"{BLOOD_ITEMS_INFO['ALT']['name']} ({BLOOD_ITEMS_INFO['ALT']['unit']})", min_value=0, key="ALT_input")
+    with col3:
+        ggtp = st.number_input(f"{BLOOD_ITEMS_INFO['γ-GTP']['name']} ({BLOOD_ITEMS_INFO['γ-GTP']['unit']})", min_value=0, key="γ-GTP_input")
+
+    st.subheader("腎機能")
+    col1, col2 = st.columns(2)
+    with col1:
+        cre = st.number_input(f"{BLOOD_ITEMS_INFO['Cre']['name']} ({BLOOD_ITEMS_INFO['Cre']['unit']})", min_value=0.0, format="%.2f", key="Cre_input")
+    with col2:
+        bun = st.number_input(f"{BLOOD_ITEMS_INFO['BUN']['name']} ({BLOOD_ITEMS_INFO['BUN']['unit']})", min_value=0.0, format="%.1f", key="BUN_input")
+
+    st.subheader("脂質")
+    col1, col2 = st.columns(2)
+    with col1:
+        tc = st.number_input(f"{BLOOD_ITEMS_INFO['TC']['name']} ({BLOOD_ITEMS_INFO['TC']['unit']})", min_value=0, key="TC_input")
+        hdl = st.number_input(f"{BLOOD_ITEMS_INFO['HDL']['name']} ({BLOOD_ITEMS_INFO['HDL']['unit']})", min_value=0, key="HDL_input")
+    with col2:
+        ldl = st.number_input(f"{BLOOD_ITEMS_INFO['LDL']['name']} ({BLOOD_ITEMS_INFO['LDL']['unit']})", min_value=0, key="LDL_input")
+        tg = st.number_input(f"{BLOOD_ITEMS_INFO['TG']['name']} ({BLOOD_ITEMS_INFO['TG']['unit']})", min_value=0, key="TG_input")
+
+    st.subheader("血糖")
+    col1, col2 = st.columns(2)
+    with col1:
+        glucose = st.number_input(f"{BLOOD_ITEMS_INFO['Glucose']['name']} ({BLOOD_ITEMS_INFO['Glucose']['unit']})", min_value=0, key="Glucose_input")
+    with col2:
+        hba1c = st.number_input(f"{BLOOD_ITEMS_INFO['HbA1c']['name']} ({BLOOD_ITEMS_INFO['HbA1c']['unit']})", min_value=0.0, format="%.1f", key="HbA1c_input")
+
+    submitted = st.form_submit_button("分析する")
+
+    if submitted:
+        # 入力されたデータを辞書にまとめる
+        input_data = {
+            "WBC": wbc if wbc > 0 else None,
+            "RBC": rbc if rbc > 0 else None,
+            "Hb": hb if hb > 0 else None,
+            "Ht": ht if ht > 0 else None,
+            "Plt": plt if plt > 0 else None,
+            "AST": ast if ast > 0 else None,
+            "ALT": alt if alt > 0 else None,
+            "γ-GTP": ggtp if ggtp > 0 else None,
+            "Cre": cre if cre > 0 else None,
+            "BUN": bun if bun > 0 else None,
+            "TC": tc if tc > 0 else None,
+            "HDL": hdl if hdl > 0 else None,
+            "LDL": ldl if ldl > 0 else None,
+            "TG": tg if tg > 0 else None,
+            "Glucose": glucose if glucose > 0 else None,
+            "HbA1c": hba1c if hba1c > 0 else None,
+        }
+
+        # Noneの項目を除外して分析に渡す
+        filtered_data = {k: v for k, v in input_data.items() if v is not None}
+
+        if filtered_data:
+            with st.spinner("分析中..."):
+                analysis_result = analyze_blood_data_form(filtered_data)
+            st.markdown("## 分析結果")
+            st.markdown(analysis_result)
+        else:
+            st.error("分析する項目が入力されていません。少なくとも1つの項目を入力してください。")
